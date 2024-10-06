@@ -24,8 +24,15 @@ type Config struct {
 	OpenAIAPIKey          string
 }
 
-type TranscriptionResponse struct {
-	Text string `json:"text"`
+type OpenAIError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Param   string `json:"param"`
+	Code    string `json:"code"`
+}
+
+type OpenAIErrorResponse struct {
+	Error OpenAIError `json:"error"`
 }
 
 type OpenAIResponse struct {
@@ -34,6 +41,10 @@ type OpenAIResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+}
+
+type TranscriptionResponse struct {
+	Text string `json:"text"`
 }
 
 func main() {
@@ -186,9 +197,9 @@ func createEmacsOrgNotes(transcriptionText, apiKey, baseFilePath string) {
 	client.SetTimeout(10 * time.Minute)
 
 	reqBody := map[string]interface{}{
-		"model":       "gpt-4",
+		"model":       "gpt-4o", // Ref: https://platform.openai.com/docs/models + https://openai.com/api/pricing/
 		"messages":    []map[string]string{message},
-		"max_tokens":  1500,
+		"max_tokens":  3000,
 		"temperature": 0.7,
 	}
 
@@ -203,7 +214,16 @@ func createEmacsOrgNotes(transcriptionText, apiKey, baseFilePath string) {
 	}
 
 	if resp.IsError() {
-		log.Fatalf("Error response from OpenAI API: %v", resp.Error())
+		var errorResponse OpenAIErrorResponse
+		if err := json.Unmarshal(resp.Body(), &errorResponse); err != nil {
+			log.Fatalf("Error unmarshalling OpenAI error response: %v", err)
+		}
+
+		log.Fatalf("OpenAI API Error:\n%s\nType: %s\nParam: %s\nCode: %s\n",
+			errorResponse.Error.Message,
+			errorResponse.Error.Type,
+			errorResponse.Error.Param,
+			errorResponse.Error.Code)
 	}
 
 	log.Println("Parsing OpenAI API response...")
@@ -224,21 +244,26 @@ func generateOrgFilePath(baseFilePath string) string {
 }
 
 func createPrompt(transcriptionText string) string {
-	return fmt.Sprintf(`I need you to summarize the following content and convert it into an Emacs Org file format.
-Please do not include any extra commentary or explanations.
-Make sure the summary is detailed but concise, capturing the key points and providing enough explanation for each section. Avoid being too brief or overly terse.
+
+	today := time.Now().Format("<2006-01-02 Mon>")
+
+	return fmt.Sprintf(`I need you to summarize the following content and convert it into an Emacs Org file format. Please do not include any extra commentary or explanations.
+
+Summarize each section thoroughly, ensuring you provide detailed explanations, examples, and sufficient elaboration on each point. The summary should capture the nuances of the content, including specific insights and supporting details that were mentioned in the original material.
+
+Make sure the summary is detailed, capturing key points while providing ample context and depth. Avoid being too brief or overly terse, and ensure that the elaboration provides useful, actionable insights in every section.
 
 The response should only contain the Emacs Org formatted output.
 
 Use the following structure:
 
-1. The file should have a #+title: and #+author: and #+date: header using today's date in the format like "<1999-10-04 Fri>"
-2. Include a "Summary" section that gives a brief overview of the key points, try
-3. Include a "Notes" section, with **subsections** that organize the content logically.
+1. The file should have a #+title: and #+author: and #+date: header with the #+date: header as %s
+2. Include a "Summary" section that gives a brief overview of the key points, with detailed elaboration.
+3. Include a "Notes" section, with **subsections** that organize the content logically. For each note, please ensure that detailed explanations, examples, and any relevant insights are included.
 
 Here is the content to summarize:
 
 %s
 
-Please format the response as a valid Emacs Org file.`, transcriptionText)
+Please format the response as a valid Emacs Org file.`, today, transcriptionText)
 }
